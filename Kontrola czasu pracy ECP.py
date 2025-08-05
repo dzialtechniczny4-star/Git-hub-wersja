@@ -14,7 +14,6 @@ from openpyxl.styles import Font
 import pandas as pd
 import json
 import tkinter.font as tkfont
-import json
 import os
 import sys
 
