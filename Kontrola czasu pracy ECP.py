@@ -17,9 +17,6 @@ import tkinter.font as tkfont
 import json
 import os
 import sys
-#sadsad
-import os
-import sys
 
 def resource_path(relative_path):
     try:
