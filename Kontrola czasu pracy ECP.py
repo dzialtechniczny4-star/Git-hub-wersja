@@ -14,18 +14,117 @@ from openpyxl.styles import Font
 import pandas as pd
 import json
 import tkinter.font as tkfont
-import os
-import sys
+import json
+import tempfile
+from pathlib import Path
+import os, sys, urllib.request, threading, queue, subprocess
+from tkinter import Tk, Toplevel, Label, StringVar, messagebox
+from ttkbootstrap import Style
+from ttkbootstrap.widgets import Progressbar
 
-def resource_path(relative_path):
+CURRENT_VERSION = "2"
+VERSION_URL     = "https://github.com/dzialtechniczny4-star/Git-hub-wersja/raw/refs/heads/main/Kontrola_czasu_pracy_ECP.exe"
+TIMEOUT         = 5 
+
+# ---------------------   POBIERANIE  -------------------------
+
+def read_remote_version():
+    with urllib.request.urlopen(VERSION_URL, timeout=TIMEOUT) as r:
+        text = r.read().decode("utf-8").strip().splitlines()
+    return text[0].strip(), (text[1].strip() if len(text) > 1 else None)
+
+def is_newer(remote, local):
+    t = lambda v: tuple(map(int, v.split(".")))
+    return t(remote) > t(local)
+
+def download_file(url:str, dest:Path, q:queue.Queue):
+    """Pobiera url do dest, co ~chunk wrzuca % do kolejki q."""
     try:
-        # PyInstaller przechowuje pliki tymczasowo w sys._MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        # Podczas normalnego uruchamiania .py
-        base_path = os.path.abspath(".")
+        with urllib.request.urlopen(url) as resp, open(dest, "wb") as out:
+            total = int(resp.getheader("Content-Length", "0"))
+            downloaded, chunk = 0, 8192
+            while True:
+                data = resp.read(chunk)
+                if not data:
+                    break
+                out.write(data)
+                downloaded += len(data)
+                if total:
+                    q.put(downloaded / total * 100)
+        q.put("done")
+    except Exception as e:
+        q.put(("error", str(e)))
 
-    return os.path.join(base_path, relative_path)
+# ---------------------   GUI   --------------------------------
+
+def show_update_window(remote_ver:str, exe_url:str):
+    dest_dir  = Path(sys.executable).resolve().parent
+    base_name = Path(exe_url).stem
+    new_name  = f"{base_name}-{remote_ver}.exe"
+    dest_path = dest_dir / new_name
+
+    q = queue.Queue()
+    t = threading.Thread(target=download_file, args=(exe_url, dest_path, q), daemon=True)
+    t.start()
+
+    # --- małe okno modalne ---
+    root = Tk()
+    root.withdraw()                   # główne niepotrzebne
+    win  = Toplevel()
+    win.title("Aktualizacja")
+    Style("flatly")                   # ładny bootstrapowy styl
+
+    Label(win, text=f"Nowa wersja {remote_ver} – trwa pobieranie").pack(padx=18, pady=(12, 6))
+    p_var = StringVar(value="0 %")
+    bar   = Progressbar(win, length=320, variable=p_var, maximum=100, bootstyle="success-striped")
+    bar.pack(padx=18, pady=(0, 8))
+
+    def poll_queue():
+        try:
+            while True:
+                msg = q.get_nowait()
+                if msg == "done":
+                    bar["value"] = 100
+                    p_var.set("100 %")
+                    win.update()
+                    messagebox.showinfo("Aktualizacja", "Pobrano – uruchamiam nową wersję.")
+                    launch_new_exe(str(dest_path))
+                elif isinstance(msg, tuple) and msg[0] == "error":
+                    messagebox.showerror("Aktualizacja", f"Błąd pobierania:\n{msg[1]}")
+                    win.destroy()
+                else:                       # liczba %
+                    bar["value"] = msg
+                    p_var.set(f"{msg:.0f} %")
+        except queue.Empty:
+            pass
+        win.after(200, poll_queue)
+
+    poll_queue()
+    win.protocol("WM_DELETE_WINDOW", lambda: None)  # blokuj zamknięcie
+    win.mainloop()
+
+# ---------------------   START/UPDATE  ------------------------
+
+def launch_new_exe(exe_path):
+    subprocess.Popen([exe_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sys.exit(0)
+
+def remove_old_versions(my_path:Path):
+    stem = my_path.stem.split("-")[0]
+    for f in my_path.parent.glob(f"{stem}-*.exe"):
+        if f != my_path:
+            try: f.unlink()
+            except PermissionError: pass
+
+def check_for_update():
+    try:
+        remote_ver, exe_url = read_remote_version()
+        if is_newer(remote_ver, CURRENT_VERSION) and exe_url:
+            show_update_window(remote_ver, exe_url)   # ← przejmuje sterowanie
+        else:
+            print("Aktualna wersja:", CURRENT_VERSION)
+    except Exception as e:
+        print("Nie udało się sprawdzić aktualizacji:", e)
 
 # --- KONFIGURACJA BAZY ---
 MYSQL_CONFIG = {
@@ -249,29 +348,6 @@ def load_users_name():
 
 USERS = load_users() 
 USER_TO_NAME = load_users_name() 
-
-
-def get_user_list():
-    dzial = [
-        u for u in USERS
-        if (u.startswith("dzial_techniczny") and USERS[u]["role"] == "user")
-    ]
-    return {"DZIAŁ TECHNICZNY": dzial}
-
-def get_real_start_time(username, data):
-    conn = connect_db()
-    cur = conn.cursor()
-    try:
-        data_mysql = datetime.strptime(data, "%d.%m.%Y").strftime("%Y-%m-%d")
-    except Exception:
-        data_mysql = datetime.now().strftime("%Y-%m-%d")
-    cur.execute("""
-        SELECT MIN(czas_od) FROM raport_ecp
-        WHERE osoba=%s AND data=%s AND czas_od IS NOT NULL AND czas_od != ''
-    """, (username, data_mysql))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row and row[0] else ""
 
 def get_real_start_end_time(username, data):
     conn = connect_db()
@@ -1707,7 +1783,7 @@ def open_main_panel(username, is_admin=False):
     main.title("Kontrola czasu pracy - Panel Główny")
     main.geometry("1720x900")
     main.resizable(True, True)
-    root.iconbitmap(resource_path("ecp_icon.ico"))
+    # root.iconbitmap(resource_path("ecp_icon.ico"))
 
     if is_admin:
         main_panel = tb.Frame(main)
@@ -1910,11 +1986,15 @@ def open_main_panel(username, is_admin=False):
         load_panel("ecp", username)
 
 # --- LOGOWANIE ---
+if getattr(sys, "frozen", False):
+    exe_path = Path(sys.executable).resolve()
+    remove_old_versions(exe_path)
+check_for_update()
 root = tb.Window(themename="superhero")
 root.title("Kontrola czasu pracy")
 root.geometry("600x400")
 root.resizable(True, True)
-root.iconbitmap(resource_path("ecp_icon.ico"))
+# root.iconbitmap(resource_path("ecp_icon.ico"))
 main_title = tb.Label(
     root,
     text="Kontrola czasu pracy",
