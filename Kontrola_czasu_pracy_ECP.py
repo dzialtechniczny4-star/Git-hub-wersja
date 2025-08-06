@@ -22,7 +22,7 @@ from tkinter import Tk, Toplevel, Label, StringVar, messagebox
 from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 
-CURRENT_VERSION = "7"
+CURRENT_VERSION = "8"
 VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
@@ -169,7 +169,6 @@ def load_dynamic_procenty(miesiac):
     else:
         return [], []
 
-
 def insert_record(row):
     conn = connect_db()
     cur = conn.cursor()
@@ -181,7 +180,6 @@ def insert_record(row):
     conn.commit()
     conn.close()
     
-
 def get_zmiana_na_dzien(username, data):  # szuka zmianę na dany dzień (DD.MM.YYYY)
     conn = connect_db()
     cur = conn.cursor()
@@ -193,6 +191,12 @@ def get_zmiana_na_dzien(username, data):  # szuka zmianę na dany dzień (DD.MM.
     row = cur.fetchone()
     conn.close()
     return row  # None albo (id, czas_od, czas_do)
+
+def resource_path(relative_path):
+    # PyInstaller: ścieżka do pliku zasobu
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.abspath(relative_path)
 
 def rozpocznij_zmiane(username, data):
     conn = connect_db()
@@ -2020,6 +2024,10 @@ root = tb.Window(themename="superhero")
 root.title("Kontrola czasu pracy")
 root.geometry("600x400")
 root.resizable(True, True)
+try:
+    root.iconbitmap(resource_path("ecp_icon.ico"))
+except Exception as e:
+    print("Nie można ustawić ikony:", e)
 # root.iconbitmap(resource_path("ecp_icon.ico"))
 main_title = tb.Label(
     root,
