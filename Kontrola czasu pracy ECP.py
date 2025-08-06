@@ -22,7 +22,7 @@ from tkinter import Tk, Toplevel, Label, StringVar, messagebox
 from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 
-CURRENT_VERSION = "2"
+CURRENT_VERSION = "5"
 VERSION_URL     = "https://github.com/dzialtechniczny4-star/Git-hub-wersja/raw/refs/heads/main/Kontrola_czasu_pracy_ECP.exe"
 TIMEOUT         = 5 
 
@@ -1734,17 +1734,12 @@ def panel_informacje_zbiorcze(parent):
                 kraj_value = ostatnie[1] if ostatnie[1] not in (None, "", "None", "null", "NULL") else "-"
             else:
                 current_task = "Koniec pracy" if czas_koniec != "brak" else "Brak zadań w toku"
-                # Pobierz kraj z ostatniego wpisu z tego dnia
-                zadania_na_dzis = [
-                    r for r in records
-                    if r[0] == osoba and r[3].strftime("%d.%m.%Y") == dzisiaj_str
-                ]
-                if zadania_na_dzis:
-                    ostatni_rek = zadania_na_dzis[-1]
-                    kraj_value = ostatni_rek[1] if ostatni_rek[1] not in (None, "", "None", "null", "NULL") else "-"
+                # Jeśli nie ma otwartego zadania i jest koniec pracy — kraj ma być pusty
+                if czas_koniec != "brak":
+                    kraj_value = ""
                 else:
                     kraj_value = "-"
-
+                    
             suma_s = hms_to_seconds(suma)
             szara_s = hms_to_seconds(szara_str)
             prywatne_s = hms_to_seconds(sum_prywatne)
