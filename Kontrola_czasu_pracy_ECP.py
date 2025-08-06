@@ -22,7 +22,7 @@ from tkinter import Tk, Toplevel, Label, StringVar, messagebox
 from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 
-CURRENT_VERSION = "5"
+CURRENT_VERSION = "6"
 VERSION_URL     = "https://github.com/dzialtechniczny4-star/Git-hub-wersja/raw/refs/heads/main/Kontrola_czasu_pracy_ECP.exe"
 TIMEOUT         = 5 
 
@@ -1671,9 +1671,18 @@ def panel_informacje_zbiorcze(parent):
             suma = sumuj_czasy(realne_zadania)
             # --- Wszystkie bloki zadaniowe (nieprywatne + prywatne) ---
             wszystkie_bloki = []
-            for blok in lista_czasow:
-                od = blok[0]
-                do = blok[1]
+
+            # Dodaj bloki zadań
+            for od, do, kraj, zad, ilosc in lista_czasow:
+                if not od or od in ("None", "null", "NULL", ""):
+                    continue
+                if not do or do in ("None", "null", "NULL", ""):
+                    wszystkie_bloki.append((od, datetime.now().strftime("%H:%M:%S")))
+                else:
+                    wszystkie_bloki.append((od, do))
+
+            # Dodaj bloki przerw prywatnych (jeśli są poza lista_czasow)
+            for od, do in lista_prywatnych:
                 if not od or od in ("None", "null", "NULL", ""):
                     continue
                 if not do or do in ("None", "null", "NULL", ""):
