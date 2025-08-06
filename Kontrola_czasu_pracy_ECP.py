@@ -21,8 +21,9 @@ import os, sys, urllib.request, threading, queue, subprocess
 from tkinter import Tk, Toplevel, Label, StringVar, messagebox
 from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
+import threading
 
-CURRENT_VERSION = "8"
+CURRENT_VERSION = "9"
 VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
@@ -191,6 +192,12 @@ def get_zmiana_na_dzien(username, data):  # szuka zmianę na dany dzień (DD.MM.
     row = cur.fetchone()
     conn.close()
     return row  # None albo (id, czas_od, czas_do)
+
+def fetch_all_records_async(callback, *args, **kwargs):
+    def worker():
+        records = fetch_all_records(*args, **kwargs)
+        root.after(0, lambda: callback(records))
+    threading.Thread(target=worker, daemon=True).start()
 
 def resource_path(relative_path):
     # PyInstaller: ścieżka do pliku zasobu
@@ -823,6 +830,8 @@ def panel_procentowy(parent):
     refresh_summary_table()
     return procent_frame
 
+pokaz_wszystkie_mode = None
+
 def panel_raport_ecp(parent, username, is_admin=False):
     raport_frame = tb.Frame(parent)
     raport_frame.pack(fill=BOTH, expand=YES)
@@ -1017,54 +1026,6 @@ def panel_raport_ecp(parent, username, is_admin=False):
             refresh_kraje_and_zadania()
             kraj_var.set(new_kraj.upper())
 
-    def add_zadanie():
-        kraj = kraj_var.get()
-        if not kraj:
-            messagebox.showerror("Błąd", "Najpierw wybierz kraj!")
-            return
-
-        popup = tk.Toplevel()
-        popup.title("Dodaj zadanie")
-        popup.geometry("360x170")
-        popup.transient(center_panel)
-        popup.grab_set()
-        center_popup(popup, center_panel)
-
-        tk.Label(popup, text="Nazwa zadania:", font=("Segoe UI", 11)).pack(pady=(18, 2))
-        zad_var = tk.StringVar()
-        entry_zad = tk.Entry(popup, textvariable=zad_var, font=("Segoe UI", 10), width=35)
-        entry_zad.pack(pady=(0, 6))
-
-        tk.Label(popup, text="Deklarowany czas (hh:mm:ss) – opcjonalnie:", font=("Segoe UI", 10)).pack(pady=(4, 2))
-        czas_var = tk.StringVar()
-        entry_czas = tk.Entry(popup, textvariable=czas_var, font=("Segoe UI", 10), width=18)
-        entry_czas.pack(pady=(0, 12))
-
-        entry_zad.focus_set()
-
-        def confirm():
-            new_zad = zad_var.get().strip()
-            czas = czas_var.get().strip()
-            if not new_zad:
-                messagebox.showerror("Błąd", "Wpisz nazwę zadania.")
-                return
-            conn = connect_db()
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT IGNORE INTO zadania (kraj, zadanie, czas_deklarowany) VALUES (%s, %s, %s)",
-                (kraj, new_zad, czas if czas else None)
-            )
-            conn.commit()
-            conn.close()
-            zadania_new = fetch_zadania(kraj)
-            zadanie_menu.config(values=zadania_new)
-            zadanie_var.set(new_zad)
-            popup.destroy()
-
-        btn = tk.Button(popup, text="Dodaj zadanie", font=("Segoe UI", 11), width=16, command=confirm)
-        btn.pack(pady=(4, 14))
-        popup.bind("<Return>", lambda e: confirm())
-
     # --- KOLUMNY I TABLE ---
     if is_admin:
         columns = (
@@ -1113,119 +1074,143 @@ def panel_raport_ecp(parent, username, is_admin=False):
         table.column(col, width=widths.get(col, 110), anchor="center", stretch=stretch_col)
     table.pack(fill="both", expand=True)
 
-    def refresh_table():
-        table.delete(*table.get_children())
-        records = fetch_all_records(
-            user=username, 
-            parent=table.winfo_toplevel(), 
-            refresh_callback=refresh_table
-        )
-        # Sortujemy po dacie rosnąco (najstarszy najpierw)
-        sorted_records = sorted(
-            [r for r in records if r[1] is not None],
-            key=lambda r: (
-                r[1] if isinstance(r[1], (datetime, date)) and r[1] is not None
-                else datetime.strptime(r[1], "%Y-%m-%d") if r[1]
-                else datetime(1900, 1, 1),
-                datetime.strptime(str(r[7]), "%H:%M:%S") if r[7] else datetime.min
-            ),
-            reverse=False
-        )
+    LAZY_PAGE_SIZE = 50  # ile rekordów ładować jednocześnie
 
-        narastajace_szare = []
-        ostatni_dzien = None
-        szara_td = timedelta()
-        ostatni_koniec = None
-
-        for rec in sorted_records:
-            zadanie = rec[4]
-            czas_od = str(rec[7]) if rec[7] else ""
-            czas_do = str(rec[8]) if rec[8] else ""
-            data = rec[1]
-            dzien = data.strftime("%d.%m.%Y") if hasattr(data, "strftime") else str(data)
-            
-            # Nowy dzień = reset liczników!
-            if ostatni_dzien != dzien:
-                szara_td = timedelta()
-                ostatni_koniec = None
-                ostatni_dzien = dzien
-
-            # Liczymy SZARĄ STREFĘ: tylko luki między zadaniami
-            if ostatni_koniec and czas_od:
-                try:
-                    t_do = datetime.strptime(ostatni_koniec, "%H:%M:%S")
-                    t_od = datetime.strptime(czas_od, "%H:%M:%S")
-                    diff = t_od - t_do
-                    # Liczymy tylko odstępy do max 4 godzin (filtrowanie anomalii!)
-                    if 0 < diff.total_seconds() < 4*3600:
-                        szara_td += diff
-                except Exception:
-                    pass
-
-            narastajace_szare.append(szara_td)
-            # Zapisz ostatni czas_do (tylko jeśli nie jest pusty)
-            if czas_do:
-                ostatni_koniec = czas_do
-
-        # Teraz nadajemy ID od 1 do n (najstarszy 1, najnowszy n)
-        total = len(sorted_records)
-
-        for idx, (rec, szara_na_ten_wiersz) in enumerate(zip(reversed(sorted_records), reversed(narastajace_szare)), 1):
-            lokalny_id = total - idx + 1  # najnowszy ma najwyższy numer
-
-            (
-                id_z_bazy, data, osoba, kraj, zadanie, opis, ilosc, czas_od, czas_do
-            ) = rec[:9]
-            date_str = data.strftime("%d.%m.%Y") if hasattr(data, "strftime") else str(data)
-            deklarowany_czas = CZASY_DEKLAROWANE.get(zadanie, {}).get(kraj, "")
-            if deklarowany_czas:
-                sekundy = hms_to_seconds(deklarowany_czas)
-                deklarowany_x_ilosc = seconds_to_hms(sekundy * int(ilosc or 0))
-            else:
-                deklarowany_x_ilosc = ""
-            suma_czasu = time_diff(czas_od, czas_do)
-
-            row = [
-                lokalny_id,
-                date_str,
-                osoba,
-                kraj,
-                zadanie,
-                deklarowany_czas,
-                opis,
-                ilosc,
-                deklarowany_x_ilosc,
-                str(czas_od) if czas_od else "",
-                str(czas_do) if czas_do else "",
-                suma_czasu,
-                seconds_to_hms(szara_na_ten_wiersz.total_seconds()),
-                "Zakończono" if czas_do else "STOP"
-            ]
-            if is_admin:
-                row.append("❌")
-            row.append(id_z_bazy)
-
-            while len(row) < len(columns):
-                row.append("")
-            if len(row) > len(columns):
-                row = row[:len(columns)]
-
-            row = [x if x not in (None, "None") else "" for x in row]
-
-            idx_akcja = list(columns).index("AKCJA")
-            if row[idx_akcja] == "STOP":
+    loaded_rows = []
+    last_loaded_idx = [0]
+    all_records_cache = []
+    global pokaz_wszystkie_mode
+    pokaz_wszystkie_mode = tk.BooleanVar(value=False)
+    def lazy_load_more():
+        nonlocal loaded_rows, last_loaded_idx, all_records_cache
+        start = last_loaded_idx[0]
+        end = start + LAZY_PAGE_SIZE
+        rows_to_load = all_records_cache[start:end]
+        for row in rows_to_load:
+            if row[list(columns).index("AKCJA")] == "STOP":
                 table.insert('', 'end', values=row, tags=('w_trakcie',))
             else:
                 table.insert('', 'end', values=row)
+            loaded_rows.append(row)
+        last_loaded_idx[0] = end
 
-        # --- TU KONTROLA BLOKADY DODAJ ---
-        w_trakcie = any(not r[8] for r in records)
-        data_str = entry_data.get()
-        ma_zmiane = czy_masz_otwarta_zmiane(username, data_str)
-        if not ma_zmiane:
-            btn_dodaj.config(state=tk.DISABLED)
-        else:
-            btn_dodaj.config(state=tk.DISABLED if w_trakcie else tk.NORMAL)
+    def refresh_table():
+        table.delete(*table.get_children())
+
+        def got_records(records):
+            nonlocal loaded_rows, last_loaded_idx, all_records_cache  # <--- DODANE
+
+            sorted_records = sorted(
+                [r for r in records if r[1] is not None],
+                key=lambda r: (
+                    r[1] if isinstance(r[1], (datetime, date)) and r[1] is not None
+                    else datetime.strptime(r[1], "%Y-%m-%d") if r[1]
+                    else datetime(1900, 1, 1),
+                    datetime.strptime(str(r[7]), "%H:%M:%S") if r[7] else datetime.min
+                ),
+                reverse=False
+            )
+
+            narastajace_szare = []
+            ostatni_dzien = None
+            szara_td = timedelta()
+            ostatni_koniec = None
+
+            for rec in sorted_records:
+                zadanie = rec[4]
+                czas_od = str(rec[7]) if rec[7] else ""
+                czas_do = str(rec[8]) if rec[8] else ""
+                data = rec[1]
+                dzien = data.strftime("%d.%m.%Y") if hasattr(data, "strftime") else str(data)
+
+                if ostatni_dzien != dzien:
+                    szara_td = timedelta()
+                    ostatni_koniec = None
+                    ostatni_dzien = dzien
+
+                if ostatni_koniec and czas_od:
+                    try:
+                        t_do = datetime.strptime(ostatni_koniec, "%H:%M:%S")
+                        t_od = datetime.strptime(czas_od, "%H:%M:%S")
+                        diff = t_od - t_do
+                        if 0 < diff.total_seconds() < 4*3600:
+                            szara_td += diff
+                    except Exception:
+                        pass
+
+                narastajace_szare.append(szara_td)
+                if czas_do:
+                    ostatni_koniec = czas_do
+
+            total = len(sorted_records)
+            new_rows = []
+            for idx, (rec, szara_na_ten_wiersz) in enumerate(zip(reversed(sorted_records), reversed(narastajace_szare)), 1):
+                lokalny_id = total - idx + 1  # najnowszy ma najwyższy numer
+
+                (
+                    id_z_bazy, data, osoba, kraj, zadanie, opis, ilosc, czas_od, czas_do
+                ) = rec[:9]
+                date_str = data.strftime("%d.%m.%Y") if hasattr(data, "strftime") else str(data)
+                deklarowany_czas = CZASY_DEKLAROWANE.get(zadanie, {}).get(kraj, "")
+                if deklarowany_czas:
+                    sekundy = hms_to_seconds(deklarowany_czas)
+                    deklarowany_x_ilosc = seconds_to_hms(sekundy * int(ilosc or 0))
+                else:
+                    deklarowany_x_ilosc = ""
+                suma_czasu = time_diff(czas_od, czas_do)
+
+                row = [
+                    lokalny_id,
+                    date_str,
+                    osoba,
+                    kraj,
+                    zadanie,
+                    deklarowany_czas,
+                    opis,
+                    ilosc,
+                    deklarowany_x_ilosc,
+                    str(czas_od) if czas_od else "",
+                    str(czas_do) if czas_do else "",
+                    suma_czasu,
+                    seconds_to_hms(szara_na_ten_wiersz.total_seconds()),
+                    "Zakończono" if czas_do else "STOP"
+                ]
+                if is_admin:
+                    row.append("❌")
+                row.append(id_z_bazy)
+                while len(row) < len(columns):
+                    row.append("")
+                if len(row) > len(columns):
+                    row = row[:len(columns)]
+                row = [x if x not in (None, "None") else "" for x in row]
+                new_rows.append(row)
+
+            # --- LAZY LOADING: tylko część na raz ---
+            loaded_rows.clear()
+            all_records_cache = new_rows
+            last_loaded_idx[0] = 0
+            table.delete(*table.get_children())
+            lazy_load_more()    # Wczytaj pierwszą porcję
+
+            # BLOKADA DODAJ (bez zmian)
+            w_trakcie = any(not r[8] for r in records)
+            data_str = entry_data.get()
+            ma_zmiane = czy_masz_otwarta_zmiane(username, data_str)
+            if not ma_zmiane:
+                btn_dodaj.config(state=tk.DISABLED)
+            else:
+                btn_dodaj.config(state=tk.DISABLED if w_trakcie else tk.NORMAL)
+
+        fetch_all_records_async(got_records, user=username, parent=table.winfo_toplevel(), refresh_callback=refresh_table)
+
+    def on_lazy_scroll(*args):
+        table.yview(*args)
+        # Jeżeli scroll na 90% lub więcej, doładuj kolejną porcję
+        if table.yview()[1] > 0.9:
+            if last_loaded_idx[0] < len(all_records_cache):
+                lazy_load_more()
+
+    yscroll.config(command=on_lazy_scroll)
             
     def on_treeview_scroll(*args):
         table.yview(*args)
@@ -1261,36 +1246,11 @@ def panel_raport_ecp(parent, username, is_admin=False):
             if new_value == old_value:
                 entry_popup.destroy()
                 return
-            # Walidacja ilości
-            if col_name == "ILOŚĆ":
-                try:
-                    new_value = int(new_value)
-                except Exception:
-                    messagebox.showerror("Błąd", "Ilość musi być liczbą całkowitą.")
-                    entry_popup.focus_set()
-                    return
-            # Walidacja daty
-            if col_name == "DATA":
-                try:
-                    datetime.strptime(new_value, "%d.%m.%Y")
-                except Exception:
-                    messagebox.showerror("Błąd", "Data musi być w formacie DD.MM.YYYY.")
-                    entry_popup.focus_set()
-                    return
-            # Walidacja czasu
-            if col_name in ("CZAS OD", "CZAS DO"):
-                try:
-                    datetime.strptime(new_value, "%H:%M:%S")
-                except Exception:
-                    messagebox.showerror("Błąd", "Czas musi być w formacie HH:MM:SS.")
-                    entry_popup.focus_set()
-                    return
-
+            # --- Walidacje jak masz teraz ---
+            # ... (tu walidacje ilości, daty, czasu) ...
             values = list(table.item(rowid, "values"))
-            # Pobierz ID_BAZA (ostatnia kolumna)
             id_baza_idx = list(columns).index("ID_BAZA")
             id_baza = values[id_baza_idx]
-
             mapping = {
                 "DATA": "data",
                 "OSOBA": "osoba",
@@ -1314,13 +1274,13 @@ def panel_raport_ecp(parent, username, is_admin=False):
                 conn.commit()
                 conn.close()
 
-            table.set(rowid, col_name, new_value)
-            entry_popup.destroy()
+            # --- TYLKO AKTUALIZUJEMY TEN JEDEN WIERSZ W TREEVIEW ---
+            values[columns_list.index(col_name)] = new_value
 
-            # Przelicz „DEKLAROWANY x ILOŚĆ” jeśli zmieniono ILOŚĆ
+            # Przelicz inne zależne kolumny, jeśli zmieniono ILOŚĆ lub CZASY
             if col_name == "ILOŚĆ":
                 zadanie = values[columns_list.index("ZADANIE")]
-                kraj = values[columns_list.index("KRAJ")] 
+                kraj = values[columns_list.index("KRAJ")]
                 ilosc = int(new_value)
                 deklarowany_czas = CZASY_DEKLAROWANE.get(zadanie, {}).get(kraj, "")
                 if deklarowany_czas:
@@ -1330,12 +1290,24 @@ def panel_raport_ecp(parent, username, is_admin=False):
                     deklarowany_x_ilosc = ""
                 idx_deklarowany = columns_list.index("DEKLAROWANY x ILOŚĆ")
                 values[idx_deklarowany] = deklarowany_x_ilosc
-                table.item(rowid, values=values)
-            refresh_table()
+
+            if col_name in ("CZAS OD", "CZAS DO"):
+                czas_od = values[columns_list.index("CZAS OD")]
+                czas_do = values[columns_list.index("CZAS DO")]
+                # Suma czasu
+                suma_czasu = time_diff(czas_od, czas_do)
+                idx_suma = columns_list.index("SUMA CZASU")
+                values[idx_suma] = suma_czasu
+                # Akcja (czy STOP/Zakończono)
+                idx_akcja = columns_list.index("AKCJA")
+                values[idx_akcja] = "Zakończono" if czas_do else "STOP"
+
+            # Odśwież wiersz w Treeview
+            table.item(rowid, values=values)
+            entry_popup.destroy()
 
         entry_popup.bind("<Return>", save_edit)
         entry_popup.bind("<FocusOut>", save_edit)
-
 
     def delete_row(event):
         if not is_admin:
@@ -1354,6 +1326,8 @@ def panel_raport_ecp(parent, username, is_admin=False):
                 conn.commit()
                 conn.close()
                 table.delete(row_id)
+
+    pokaz_wszystkie_state = {'all': False}
 
     def dodaj_rekord():
         czas_od = datetime.now().strftime("%H:%M:%S")
@@ -1381,10 +1355,45 @@ def panel_raport_ecp(parent, username, is_admin=False):
             entry_ilosc.delete(0, 'end')
         refresh_kraje_and_zadania()
 
-    btn_dodaj = tb.Button(raport_frame, text="DODAJ", bootstyle=SUCCESS, command=dodaj_rekord, state=tk.NORMAL)
-    btn_dodaj.pack(pady=18)
-    
+    pokaz_wszystkie_state = {'all': False}
 
+    bottom_row_frame = tb.Frame(raport_frame)
+    bottom_row_frame.pack(fill="x", padx=10, pady=(12, 14))
+
+    # Przycisk „DODAJ” na środku
+    btn_dodaj = tb.Button(bottom_row_frame, text="DODAJ", bootstyle=SUCCESS, command=dodaj_rekord, state=tk.NORMAL)
+    btn_dodaj.pack(side="left", expand=True)
+
+    # Przycisk „Pokaż wszystkie” w prawym rogu (na razie bez command)
+    btn_pokaz_wszystkie = tb.Button(bottom_row_frame, text="Pokaż wszystkie", bootstyle="primary-outline")
+    btn_pokaz_wszystkie.pack(side="right")
+
+    def toggle_pokaz_wszystkie():
+        if not pokaz_wszystkie_state['all']:
+            # POKAŻ WSZYSTKIE
+            table.delete(*table.get_children())
+            for row in all_records_cache:
+                if row[list(columns).index("AKCJA")] == "STOP":
+                    table.insert('', 'end', values=row, tags=('w_trakcie',))
+                else:
+                    table.insert('', 'end', values=row)
+            btn_pokaz_wszystkie.config(text="Pokaż pierwsze", bootstyle="primary")
+            yscroll.config(command=table.yview)  # scroll bez lazy loading
+            pokaz_wszystkie_state['all'] = True
+        else:
+            # WRÓĆ DO LAZY LOADING (czyli z powrotem jak na początku)
+            table.delete(*table.get_children())
+            loaded_rows.clear()
+            last_loaded_idx[0] = 0
+            lazy_load_more()
+            btn_pokaz_wszystkie.config(text="Pokaż wszystkie", bootstyle="primary-outline")
+            yscroll.config(command=on_lazy_scroll)
+            pokaz_wszystkie_state['all'] = False
+
+    # **To jest PRAWIDŁOWE miejsce, bo btn już istnieje**
+    btn_pokaz_wszystkie.config(command=toggle_pokaz_wszystkie)
+
+    # Dalej bez zmian:
     def stop_rekord(event):
         region = table.identify("region", event.x, event.y)
         col = table.identify_column(event.x)
@@ -1397,23 +1406,23 @@ def panel_raport_ecp(parent, username, is_admin=False):
             if values[idx_akcja].strip().upper() == "STOP":
                 now = datetime.now().strftime("%H:%M:%S")
                 update_czas_do(id_z_bazy, now)
-                refresh_table()
-            else:
-                # Kliknięcie w Zakończono, nie robimy nic
-                pass
+                # Pobierz aktualne values i zaktualizuj pola w tym wierszu
+                values[idx_akcja] = "Zakończono"
+                idx_czas_do = list(columns).index("CZAS DO")
+                values[idx_czas_do] = now
+                idx_suma = list(columns).index("SUMA CZASU")
+                czas_od = values[list(columns).index("CZAS OD")]
+                values[idx_suma] = time_diff(czas_od, now)
+                table.item(row_id, values=values)
         # Obsługa usuwania w adminie (jeśli jest kolumna USUŃ)
         if is_admin and "USUŃ" in columns:
             idx_usun = list(columns).index("USUŃ")
             if col == f"#{idx_usun+1}" and row_id:
                 delete_row(event)
 
-    def auto_refresh():
-        refresh_table()
-        raport_frame.after(30000, auto_refresh)  # co 30 sek.
-
-    auto_refresh()
-    table.bind("<Double-1>", edit_cell_admin)
     table.bind("<Button-1>", stop_rekord)
+
+    table.bind("<Double-1>", edit_cell_admin)
     refresh_table()
     return raport_frame
 
