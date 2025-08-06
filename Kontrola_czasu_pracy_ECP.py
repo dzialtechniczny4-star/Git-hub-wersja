@@ -22,8 +22,8 @@ from tkinter import Tk, Toplevel, Label, StringVar, messagebox
 from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 
-CURRENT_VERSION = "6"
-VERSION_URL     = "https://github.com/dzialtechniczny4-star/Git-hub-wersja/raw/refs/heads/main/Kontrola_czasu_pracy_ECP.exe"
+CURRENT_VERSION = "7"
+VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
 # ---------------------   POBIERANIE  -------------------------
@@ -1515,7 +1515,7 @@ def panel_informacje_zbiorcze(parent):
 
     dzienna.bind("<Double-1>", preview_cell_zbiorcze)
 
-    def wylicz_ecp(lista_czasow_full, lista_deklarowanych, lista_prywatnych):
+    def wylicz_ecp(lista_czasow_full, lista_deklarowanych, lista_prywatnych, czas_zadan):
         def czas_w_sekundach(od, do):
             try:
                 t1 = datetime.strptime(od, "%H:%M:%S")
@@ -1537,8 +1537,7 @@ def panel_informacje_zbiorcze(parent):
             for od, do, zad, dek, ilosc in lista_deklarowanych
             if od and do and dek and do not in ('', 'None', None)
         )
-
-        # TU DODAJEMY: TRWAJĄCE PRZERWY!
+        # Suma prywaty
         now = datetime.now().strftime("%H:%M:%S")
         suma_prywatna = 0
         for od, do in lista_prywatnych:
@@ -1559,14 +1558,23 @@ def panel_informacje_zbiorcze(parent):
             except Exception:
                 continue
 
+        # Procent deklaracji
         if suma_deklarowana > 0 and suma_rzeczywista > 0:
-            ecp = (suma_deklarowana / suma_rzeczywista) * 100
+            proc_deklaracji = (suma_deklarowana / suma_rzeczywista) * 100
         else:
-            ecp = 100.0
-        if suma_prywatna > 0 and suma_rzeczywista > 0:
-            ecp = ecp - (suma_prywatna / suma_rzeczywista * 100)
+            proc_deklaracji = 100.0
+
+        # Procent prywaty (od całego czasu zadań, czyli suma wszystkich bloków zadań bez przerw)
+        if czas_zadan > 0:
+            proc_prywaty = (suma_prywatna / czas_zadan) * 100
+        else:
+            proc_prywaty = 0.0
+
+        ecp = proc_deklaracji - proc_prywaty
         ecp = max(ecp, 0)
-        return f"{ecp:.0f}%"
+
+        # Możesz zwracać wszystkie trzy wartości (do podglądu/debuga)
+        return f"{ecp:.0f}%", proc_deklaracji, proc_prywaty
 
     def aktualizuj_tabele(*_):
         miesiac = miesiac_var.get()
@@ -1629,8 +1637,22 @@ def panel_informacje_zbiorcze(parent):
                     lista_prywatnych.append((od, do))
 
             # NOWE LICZENIE ECP
-            ecp_str = wylicz_ecp(lista_czasow_full, lista_deklarowanych, lista_prywatnych)
+            realne_zadania = []
+            for od, do, zad, *_ in lista_czasow:
+                if not od or "przerwa" in (zad or "").lower():
+                    continue
+                if (not do or str(do).lower() in ("none", "null", "")):
+                    realne_zadania.append((od, datetime.now().strftime("%H:%M:%S")))
+                else:
+                    realne_zadania.append((od, do))
+            suma = sumuj_czasy(realne_zadania)
 
+            czas_zadan = hms_to_seconds(sumuj_czasy(realne_zadania))  # suma wszystkich zadań (bez prywaty)
+
+            # NOWE LICZENIE ECP
+            ecp_str, proc_deklaracji, proc_prywaty = wylicz_ecp(
+                lista_czasow_full, lista_deklarowanych, lista_prywatnych, czas_zadan
+            )
             # Reszta bez zmian (przerwa prywatna, szara strefa, itp.)
             prywatne_lista = [x for x in lista_prywatnych]
             suma_prywatna = timedelta()
