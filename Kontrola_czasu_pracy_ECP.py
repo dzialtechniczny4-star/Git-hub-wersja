@@ -23,7 +23,7 @@ from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 import threading
 
-CURRENT_VERSION = "9"
+CURRENT_VERSION = "10"
 VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
@@ -1401,12 +1401,11 @@ def panel_raport_ecp(parent, username, is_admin=False):
         idx_akcja = list(columns).index("AKCJA")
         idx_id_baza = list(columns).index("ID_BAZA")
         if col == f"#{idx_akcja+1}" and row_id:
-            values = table.item(row_id, "values")
+            values = list(table.item(row_id, "values"))  # <- to naprawia błąd!
             id_z_bazy = values[idx_id_baza]
             if values[idx_akcja].strip().upper() == "STOP":
                 now = datetime.now().strftime("%H:%M:%S")
                 update_czas_do(id_z_bazy, now)
-                # Pobierz aktualne values i zaktualizuj pola w tym wierszu
                 values[idx_akcja] = "Zakończono"
                 idx_czas_do = list(columns).index("CZAS DO")
                 values[idx_czas_do] = now
@@ -1414,6 +1413,7 @@ def panel_raport_ecp(parent, username, is_admin=False):
                 czas_od = values[list(columns).index("CZAS OD")]
                 values[idx_suma] = time_diff(czas_od, now)
                 table.item(row_id, values=values)
+
         # Obsługa usuwania w adminie (jeśli jest kolumna USUŃ)
         if is_admin and "USUŃ" in columns:
             idx_usun = list(columns).index("USUŃ")
