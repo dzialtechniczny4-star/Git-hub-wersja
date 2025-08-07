@@ -23,7 +23,7 @@ from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 import threading
 
-CURRENT_VERSION = "10"
+CURRENT_VERSION = "11"
 VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
@@ -1098,8 +1098,9 @@ def panel_raport_ecp(parent, username, is_admin=False):
         table.delete(*table.get_children())
 
         def got_records(records):
-            nonlocal loaded_rows, last_loaded_idx, all_records_cache  # <--- DODANE
+            nonlocal loaded_rows, last_loaded_idx, all_records_cache
 
+            # --- Sortowanie i przygotowanie rekordów do tabeli (Twoja dotychczasowa logika) ---
             sorted_records = sorted(
                 [r for r in records if r[1] is not None],
                 key=lambda r: (
@@ -1185,21 +1186,50 @@ def panel_raport_ecp(parent, username, is_admin=False):
                 row = [x if x not in (None, "None") else "" for x in row]
                 new_rows.append(row)
 
-            # --- LAZY LOADING: tylko część na raz ---
+            # --- BLOKADA PRZYCISKU DODAJ wg reguł ---
+            data_str = entry_data.get()
+            ma_zmiane = czy_masz_otwarta_zmiane(username, data_str)
+
+            # Ustal właściwy format szukanej daty (zawsze DD.MM.YYYY jako string)
+            try:
+                szukana_data = datetime.strptime(data_str, "%d.%m.%Y").date()
+            except Exception:
+                szukana_data = None
+
+            otwarte_zadanie = False
+            for r in records:
+                czy_osoba = (r[2] == username)
+                # Sprawdź typ pola data (r[1])
+                if isinstance(r[1], (datetime, date)):
+                    data_row = r[1].date() if isinstance(r[1], datetime) else r[1]
+                elif isinstance(r[1], str):
+                    try:
+                        data_row = datetime.strptime(r[1], "%Y-%m-%d").date()
+                    except Exception:
+                        try:
+                            data_row = datetime.strptime(r[1], "%d.%m.%Y").date()
+                        except Exception:
+                            continue
+                else:
+                    continue
+
+                czy_data = (szukana_data is not None and data_row == szukana_data)
+                czy_otwarte = (not r[8] or str(r[8]).lower() in ("none", "null", ""))
+                if czy_osoba and czy_data and czy_otwarte:
+                    otwarte_zadanie = True
+                    break
+
+            if ma_zmiane and not otwarte_zadanie:
+                btn_dodaj.config(state=tk.NORMAL)
+            else:
+                btn_dodaj.config(state=tk.DISABLED)
+
+            # --- LAZY LOADING ---
             loaded_rows.clear()
             all_records_cache = new_rows
             last_loaded_idx[0] = 0
             table.delete(*table.get_children())
-            lazy_load_more()    # Wczytaj pierwszą porcję
-
-            # BLOKADA DODAJ (bez zmian)
-            w_trakcie = any(not r[8] for r in records)
-            data_str = entry_data.get()
-            ma_zmiane = czy_masz_otwarta_zmiane(username, data_str)
-            if not ma_zmiane:
-                btn_dodaj.config(state=tk.DISABLED)
-            else:
-                btn_dodaj.config(state=tk.DISABLED if w_trakcie else tk.NORMAL)
+            lazy_load_more()
 
         fetch_all_records_async(got_records, user=username, parent=table.winfo_toplevel(), refresh_callback=refresh_table)
 
