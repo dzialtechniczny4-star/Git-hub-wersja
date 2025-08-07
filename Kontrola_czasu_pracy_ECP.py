@@ -23,7 +23,7 @@ from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 import threading
 
-CURRENT_VERSION = "11"
+CURRENT_VERSION = "12"
 VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
@@ -33,6 +33,14 @@ def read_remote_version():
     with urllib.request.urlopen(VERSION_URL, timeout=TIMEOUT) as r:
         text = r.read().decode("utf-8").strip().splitlines()
     return text[0].strip(), (text[1].strip() if len(text) > 1 else None)
+
+def get_local_version():
+    exe = Path(sys.executable)
+    name = exe.name
+    if "-" in name and name.endswith(".exe"):
+        v = name.split("-")[-1].replace(".exe", "")
+        return v
+    return CURRENT_VERSION
 
 def is_newer(remote, local):
     t = lambda v: tuple(map(int, v.split(".")))
@@ -120,12 +128,14 @@ def remove_old_versions(my_path:Path):
 def check_for_update():
     try:
         remote_ver, exe_url = read_remote_version()
-        if is_newer(remote_ver, CURRENT_VERSION) and exe_url:
-            show_update_window(remote_ver, exe_url)   # ← przejmuje sterowanie
+        local_ver = get_local_version()
+        if is_newer(remote_ver, local_ver) and exe_url:
+            show_update_window(remote_ver, exe_url)
         else:
-            print("Aktualna wersja:", CURRENT_VERSION)
+            print("Aktualna wersja:", local_ver)
     except Exception as e:
         print("Nie udało się sprawdzić aktualizacji:", e)
+
 
 # --- KONFIGURACJA BAZY ---
 MYSQL_CONFIG = {
@@ -1443,6 +1453,7 @@ def panel_raport_ecp(parent, username, is_admin=False):
                 czas_od = values[list(columns).index("CZAS OD")]
                 values[idx_suma] = time_diff(czas_od, now)
                 table.item(row_id, values=values)
+                refresh_table()
 
         # Obsługa usuwania w adminie (jeśli jest kolumna USUŃ)
         if is_admin and "USUŃ" in columns:
