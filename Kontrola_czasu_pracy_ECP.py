@@ -23,7 +23,7 @@ from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 import threading
 
-CURRENT_VERSION = "19"
+CURRENT_VERSION = "20"
 VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
@@ -1044,6 +1044,39 @@ def panel_raport_ecp(parent, username, is_admin=False):
     btn_start.config(command=rozpocznij_prace)
     btn_koniec.config(command=zakoncz_prace)
 
+    def update_dodaj_state():
+        data_str = entry_data.get()
+        ma_zmiane = czy_masz_otwarta_zmiane(username, data_str)
+        try:
+            szukana_data = datetime.strptime(data_str, "%d.%m.%Y").date()
+        except Exception:
+            szukana_data = None
+
+        otwarte_zadanie = False
+        for iid in table.get_children():
+            values = table.item(iid, "values")
+            osoba_idx = list(columns).index("OSOBA")
+            data_idx = list(columns).index("DATA")
+            akcja_idx = list(columns).index("AKCJA")
+            osoba = values[osoba_idx]
+            # obsługa daty w formacie DD.MM.YYYY
+            data_row = None
+            try:
+                data_row = datetime.strptime(values[data_idx], "%d.%m.%Y").date()
+            except Exception:
+                try:
+                    data_row = datetime.strptime(values[data_idx], "%Y-%m-%d").date()
+                except Exception:
+                    continue
+            if osoba == username and data_row == szukana_data and values[akcja_idx].strip().upper() == "STOP":
+                otwarte_zadanie = True
+                break
+
+        if ma_zmiane and not otwarte_zadanie:
+            btn_dodaj.config(state=tk.NORMAL)
+        else:
+            btn_dodaj.config(state=tk.DISABLED)
+
     def refresh_kraje_and_zadania():
         kraje_list_new = fetch_kraje()
         kraj_menu.config(values=kraje_list_new)
@@ -1399,11 +1432,12 @@ def panel_raport_ecp(parent, username, is_admin=False):
         row_id = table.identify_row(event.y)
         if col_idx == list(columns).index("USUŃ") and row_id:
             values = table.item(row_id, "values")
-            id_ = values[0]
+            id_baza_idx = list(columns).index("ID_BAZA")
+            id_baza = values[id_baza_idx]
             if messagebox.askyesno("Potwierdź usunięcie", "Usunąć ten wpis?"):
                 conn = connect_db()
                 cur = conn.cursor()
-                cur.execute("DELETE FROM raport_ecp WHERE id=%s", (id_,))
+                cur.execute("DELETE FROM raport_ecp WHERE id=%s", (id_baza,))
                 conn.commit()
                 conn.close()
                 table.delete(row_id)
@@ -1498,15 +1532,16 @@ def panel_raport_ecp(parent, username, is_admin=False):
                 czas_od = values[list(columns).index("CZAS OD")]
                 values[idx_suma] = time_diff(czas_od, now)
                 table.item(row_id, values=values)
+                update_dodaj_state()  # <<< DODAJ TO TUTAJ
 
-        # Obsługa usuwania w adminie (jeśli jest kolumna USUŃ)
+        # Obsługa usuwania w adminie (jeśli jest kolumna USUŃ)s
         if is_admin and "USUŃ" in columns:
             idx_usun = list(columns).index("USUŃ")
             if col == f"#{idx_usun+1}" and row_id:
                 delete_row(event)
 
     table.bind("<Button-1>", stop_rekord)
-
+    update_dodaj_state()
     table.bind("<Double-1>", edit_cell_admin)
     refresh_table()
     return raport_frame
