@@ -23,7 +23,7 @@ from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 import threading
 
-CURRENT_VERSION = "17"
+CURRENT_VERSION = "18"
 VERSION_URL     = "https://github.com/dzialtechniczny4-star/Git-hub-wersja/raw/refs/heads/main/Kontrola_czasu_pracy_ECP.exe"
 TIMEOUT         = 5 
 
@@ -97,6 +97,8 @@ def show_update_window(remote_ver:str, exe_url:str):
                     p_var.set("100 %")
                     win.update()
                     messagebox.showinfo("Aktualizacja", "Pobrano – uruchamiam nową wersję.")
+                    # USUŃ STARE WERSJE TYLKO Z TEGO KATALOGU
+                    remove_old_versions(dest_path)
                     launch_new_exe(str(dest_path))
                 elif isinstance(msg, tuple) and msg[0] == "error":
                     messagebox.showerror("Aktualizacja", f"Błąd pobierania:\n{msg[1]}")
