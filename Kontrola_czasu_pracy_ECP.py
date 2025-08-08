@@ -23,8 +23,8 @@ from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 import threading
 
-CURRENT_VERSION = "18"
-VERSION_URL     = "https://github.com/dzialtechniczny4-star/Git-hub-wersja/raw/refs/heads/main/Kontrola_czasu_pracy_ECP.exe"
+CURRENT_VERSION = "19"
+VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
 # ---------------------   POBIERANIE  -------------------------
@@ -118,7 +118,7 @@ def show_update_window(remote_ver:str, exe_url:str):
 
 def launch_new_exe(exe_path):
     subprocess.Popen([exe_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    sys.exit(0)
+    os._exit(0)
 
 def remove_old_versions(my_path:Path):
     stem = my_path.stem.split("-")[0]
@@ -2109,6 +2109,18 @@ def open_main_panel(username, is_admin=False):
 
         load_panel("ecp", username)
 
+def force_quit():
+    # Najpierw spróbuj zamknąć główne okno (jeśli istnieje)
+    try:
+        import tkinter as tk
+        if tk._default_root:
+            tk._default_root.quit()
+            tk._default_root.destroy()
+    except Exception:
+        pass
+    # Potem brutalnie zakończ proces (Windows only)
+    os._exit(0)
+
 # --- LOGOWANIE ---
 if getattr(sys, "frozen", False):
     exe_path = Path(sys.executable).resolve()
@@ -2123,6 +2135,8 @@ try:
     root.iconbitmap(resource_path("ecp_icon.ico"))
 except Exception as e:
     print("Nie można ustawić ikony:", e)
+
+root.protocol("WM_DELETE_WINDOW", force_quit)  # <- TO DODAJ TUTAJ
 # root.iconbitmap(resource_path("ecp_icon.ico"))
 main_title = tb.Label(
     root,
