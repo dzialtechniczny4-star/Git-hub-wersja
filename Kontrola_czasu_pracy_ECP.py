@@ -23,7 +23,7 @@ from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 import threading
 
-CURRENT_VERSION = "13"
+CURRENT_VERSION = "14"
 VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
@@ -68,8 +68,8 @@ def download_file(url:str, dest:Path, q:queue.Queue):
 
 def show_update_window(remote_ver:str, exe_url:str):
     dest_dir  = Path(sys.executable).resolve().parent
-    base_name = Path(exe_url).stem
-    new_name  = f"{base_name}-{remote_ver}.exe"
+    base_name = Path(sys.executable).stem.split("-")[0]  # 'Kontrola_czasu_pracy_ECP'
+    new_name  = f"{base_name}.exe"
     dest_path = dest_dir / new_name
 
     q = queue.Queue()
