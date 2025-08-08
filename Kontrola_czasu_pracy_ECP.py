@@ -23,7 +23,7 @@ from ttkbootstrap import Style
 from ttkbootstrap.widgets import Progressbar
 import threading
 
-CURRENT_VERSION = "12"
+CURRENT_VERSION = "13"
 VERSION_URL     = "https://raw.githubusercontent.com/dzialtechniczny4-star/Git-hub-wersja/refs/heads/main/version"
 TIMEOUT         = 5 
 
@@ -459,6 +459,87 @@ columns_user = (
     "ID", "DATA", "OSOBA", "KRAJ", "ZADANIE", "DEKLAROWANY CZAS", "OPIS", "ILOŚĆ",
     "CZAS OD", "CZAS DO", "SUMA CZASU", "AKCJA"
 )
+def fetch_naglowki():
+    conn = connect_db()
+    cur = conn.cursor()
+    cur.execute("SELECT naglowki FROM naglowki LIMIT 1")  # lub WHERE, jeśli masz wiele zestawów
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        # fallback
+        return ["Oddział", "Dział", "Nazwisko i Imię"]
+    return json.loads(row[0])
+
+def freeze_month_if_needed():
+    today = datetime.now()
+    prev_month = today.month - 1
+    year = today.year
+    if prev_month == 0:
+        prev_month = 12
+        year -= 1
+    miesiac = MIESIACE[prev_month - 1]
+    # Jeśli nie ma zapisanych statycznych danych na ten miesiąc, to zamroź
+    cols, rows = load_dynamic_procenty(miesiac)
+    if not cols:
+        cols_dyn, rows_dyn = calculate_procenty_for_month(miesiac)
+        save_dynamic_procenty(miesiac, cols_dyn, rows_dyn)
+        
+def is_month_closed(miesiac):
+    idx = MIESIACE.index(miesiac)
+    year = datetime.now().year
+    # Numer miesiąca: styczeń = 1 itd.
+    miesiac_num = idx + 1
+    today = datetime.now()
+    # Zamknięty, jeśli aktualny rok jest większy lub jesteśmy po tym miesiącu
+    return (today.year > year) or (today.year == year and today.month > miesiac_num)
+
+def calculate_procenty_for_month(miesiac):
+    miesiac_idx = MIESIACE.index(miesiac) + 1
+    year = datetime.now().year
+
+    # Pobierz nagłówki (kolumny)
+    columns = fetch_naglowki()
+    rodzaje = columns[3:]
+
+    conn = connect_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT r.osoba, z.rodzaj, z.kraj, r.czas_od, r.czas_do
+        FROM raport_ecp r
+        LEFT JOIN zadania z ON r.zadanie = z.zadanie AND r.kraj = z.kraj
+        WHERE MONTH(r.data) = %s AND YEAR(r.data) = %s
+        ORDER BY r.osoba, r.czas_od
+    """, (miesiac_idx, year))
+    records = cur.fetchall()
+    conn.close()
+    users_tasks = {}
+    for osoba, rodzaj, kraj, czas_od, czas_do in records:
+        rodzaj = rodzaj or "INNE"
+        if not osoba or not rodzaj or not czas_od or not czas_do:
+            continue
+        try:
+            t1 = datetime.strptime(str(czas_od), "%H:%M:%S")
+            t2 = datetime.strptime(str(czas_do), "%H:%M:%S")
+            delta = (t2 - t1).total_seconds()
+            if delta < 0: delta += 24 * 3600  # przekroczenie północy
+        except Exception:
+            continue
+        users_tasks.setdefault(osoba, {})
+        users_tasks[osoba][rodzaj] = users_tasks[osoba].get(rodzaj, 0) + delta
+
+    rows = []
+    for osoba, rodzaje_dict in users_tasks.items():
+        sum_all = sum(rodzaje_dict.get(rodzaj, 0) for rodzaj in rodzaje)
+        if not sum_all:
+            continue
+        row = ["KIELCE", "Dział BOT", USER_TO_NAME.get(osoba, osoba)]
+        for rodzaj in rodzaje:
+            czas = rodzaje_dict.get(rodzaj, 0)
+            percent = (czas / sum_all) * 100 if sum_all else 0
+            row.append(f"{percent:.0f}%" if czas else "0%")
+        rows.append(row)
+    return columns, rows
 
 def get_active_names_for_month(miesiac):
     conn = connect_db()
@@ -598,12 +679,10 @@ def panel_procentowy(parent):
     def refresh_summary_table(*_):
         sum_table.delete(*sum_table.get_children())
         month = month_var.get().upper()
-        # OD LIPCA 2024 liczymy z raportu!
-        idx = MIESIACE.index(month)
-        if idx >= 6:  # 6 = lipiec (liczone od 0)
-            columns, rows = calculate_procenty_for_month(month)
+        if is_month_closed(month):
+            columns, rows = load_dynamic_procenty(month)   # Statyczne, edytowalne/importowane
         else:
-            columns, rows = load_dynamic_procenty(month)
+            columns, rows = calculate_procenty_for_month(month)  # Dynamiczne, na podstawie raportów
         if not columns:
             return
         sum_table["columns"] = columns
@@ -615,70 +694,12 @@ def panel_procentowy(parent):
             sum_table.insert('', 'end', values=row)
         fit_columns_to_content(sum_table)
     month_menu.bind("<<ComboboxSelected>>", lambda e: refresh_summary_table())
-    
-    def fetch_naglowki():
-        conn = connect_db()
-        cur = conn.cursor()
-        cur.execute("SELECT naglowki FROM naglowki LIMIT 1")  # lub WHERE, jeśli masz wiele zestawów
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        if not row:
-            # fallback
-            return ["Oddział", "Dział", "Nazwisko i Imię"]
-        return json.loads(row[0])
-
-    def calculate_procenty_for_month(miesiac):
-        miesiac_idx = MIESIACE.index(miesiac) + 1
-        year = datetime.now().year
-
-        # Pobierz nagłówki (kolumny)
-        columns = fetch_naglowki()
-        rodzaje = columns[3:]
-
-        conn = connect_db()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT r.osoba, z.rodzaj,z.kraj, r.czas_od, r.czas_do
-            FROM raport_ecp r
-            LEFT JOIN zadania z ON r.zadanie = z.zadanie AND r.kraj = z.kraj
-            WHERE MONTH(r.data) = %s AND YEAR(r.data) = %s
-            ORDER BY r.osoba, r.czas_od
-        """, (miesiac_idx, year))
-        records = cur.fetchall()
-        conn.close()
-        users_tasks = {}
-        for osoba, rodzaj, kraj, czas_od, czas_do in records:
-            rodzaj = rodzaj or "INNE"
-            if not osoba or not rodzaj or not czas_od or not czas_do:
-                continue
-            try:
-                t1 = datetime.strptime(str(czas_od), "%H:%M:%S")
-                t2 = datetime.strptime(str(czas_do), "%H:%M:%S")
-                delta = (t2 - t1).total_seconds()
-                if delta < 0: delta += 24 * 3600  # przekroczenie północy
-            except Exception:
-                continue
-            users_tasks.setdefault(osoba, {})
-            users_tasks[osoba][rodzaj] = users_tasks[osoba].get(rodzaj, 0) + delta
-
-        rows = []
-        for osoba, rodzaje_dict in users_tasks.items():
-            # POPRAWKA: sumuj tylko summary columns!
-            sum_all = sum(rodzaje_dict.get(rodzaj, 0) for rodzaj in rodzaje)
-            if not sum_all:
-                continue
-            row = ["KIELCE", "Dział BOT", USER_TO_NAME.get(osoba, osoba)]
-            for rodzaj in rodzaje:
-                czas = rodzaje_dict.get(rodzaj, 0)
-                percent = (czas / sum_all) * 100 if sum_all else 0
-                row.append(f"{percent:.0f}%" if czas else "0%")
-            rows.append(row)
-        # *** NA SAMYM KOŃCU ***
-        return columns, rows
 
     def import_procentowy_xlsx_csv():
         miesiac = month_var.get().upper()
+        if not is_month_closed(miesiac):
+            messagebox.showwarning("Import", "Import możliwy tylko dla zamkniętych miesięcy!")
+            return
         file_path = filedialog.askopenfilename(
             title="Wybierz plik XLSX lub CSV",
             filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")]
@@ -752,6 +773,7 @@ def panel_procentowy(parent):
             return
 
         rows.extend(nowe_wiersze)
+        rows = sorted(rows, key=lambda r: r[2].lower())
         save_dynamic_procenty(miesiac, columns, rows)
         refresh_summary_table()
         messagebox.showinfo(
@@ -1286,8 +1308,7 @@ def panel_raport_ecp(parent, username, is_admin=False):
             if new_value == old_value:
                 entry_popup.destroy()
                 return
-            # --- Walidacje jak masz teraz ---
-            # ... (tu walidacje ilości, daty, czasu) ...
+
             values = list(table.item(rowid, "values"))
             id_baza_idx = list(columns).index("ID_BAZA")
             id_baza = values[id_baza_idx]
@@ -1303,25 +1324,38 @@ def panel_raport_ecp(parent, username, is_admin=False):
             }
             sql_col = mapping.get(col_name)
 
-            # Zapis do MySQL:
+            # ZAPIS DO BAZY — specjalnie obsłuż ILOŚĆ!
             if sql_col:
                 conn = connect_db()
                 cur = conn.cursor()
-                val = new_value
                 if col_name == "DATA":
-                    val = datetime.strptime(new_value, "%d.%m.%Y").strftime("%Y-%m-%d")
+                    try:
+                        val = datetime.strptime(new_value, "%d.%m.%Y").strftime("%Y-%m-%d")
+                    except Exception:
+                        messagebox.showerror("Błąd", "Data musi być w formacie DD.MM.YYYY")
+                        entry_popup.focus_set()
+                        conn.close()
+                        return
+                elif col_name == "ILOŚĆ":
+                    try:
+                        val = int(new_value)
+                    except Exception:
+                        val = 0
+                    values[columns_list.index(col_name)] = val  # Popraw od razu widok na liczbowy!
+                else:
+                    val = new_value
                 cur.execute(f"UPDATE raport_ecp SET {sql_col}=%s WHERE id=%s", (val, id_baza))
                 conn.commit()
                 conn.close()
 
-            # --- TYLKO AKTUALIZUJEMY TEN JEDEN WIERSZ W TREEVIEW ---
-            values[columns_list.index(col_name)] = new_value
-
-            # Przelicz inne zależne kolumny, jeśli zmieniono ILOŚĆ lub CZASY
+            # Aktualizuj TYLKO W TREEVIEW:
             if col_name == "ILOŚĆ":
                 zadanie = values[columns_list.index("ZADANIE")]
                 kraj = values[columns_list.index("KRAJ")]
-                ilosc = int(new_value)
+                try:
+                    ilosc = int(new_value)
+                except Exception:
+                    ilosc = 0
                 deklarowany_czas = CZASY_DEKLAROWANE.get(zadanie, {}).get(kraj, "")
                 if deklarowany_czas:
                     sekundy = hms_to_seconds(deklarowany_czas)
@@ -1330,6 +1364,10 @@ def panel_raport_ecp(parent, username, is_admin=False):
                     deklarowany_x_ilosc = ""
                 idx_deklarowany = columns_list.index("DEKLAROWANY x ILOŚĆ")
                 values[idx_deklarowany] = deklarowany_x_ilosc
+                values[columns_list.index(col_name)] = ilosc  # Pokazuj 0 jak pusto!
+                table.item(rowid, values=values)
+                entry_popup.destroy()
+                return
 
             if col_name in ("CZAS OD", "CZAS DO"):
                 czas_od = values[columns_list.index("CZAS OD")]
@@ -1343,6 +1381,7 @@ def panel_raport_ecp(parent, username, is_admin=False):
                 values[idx_akcja] = "Zakończono" if czas_do else "STOP"
 
             # Odśwież wiersz w Treeview
+            values[columns_list.index(col_name)] = new_value
             table.item(rowid, values=values)
             entry_popup.destroy()
 
@@ -1376,13 +1415,17 @@ def panel_raport_ecp(parent, username, is_admin=False):
         except Exception:
             messagebox.showerror("Błąd", "Data musi być w formacie DD.MM.YYYY")
             return
+        try:
+            ilosc_int = int(entry_ilosc.get() or "0")
+        except Exception:
+            ilosc_int = 0
         row = (
             data_mysql,
             osoba_var.get(),
             kraj_var.get(),
             zadanie_var.get(),
             entry_opis.get(),
-            int(entry_ilosc.get() or 0) if entry_ilosc else 0,
+            ilosc_int,
             czas_od,
             None
         )
@@ -1453,7 +1496,6 @@ def panel_raport_ecp(parent, username, is_admin=False):
                 czas_od = values[list(columns).index("CZAS OD")]
                 values[idx_suma] = time_diff(czas_od, now)
                 table.item(row_id, values=values)
-                refresh_table()
 
         # Obsługa usuwania w adminie (jeśli jest kolumna USUŃ)
         if is_admin and "USUŃ" in columns:
@@ -2070,6 +2112,7 @@ if getattr(sys, "frozen", False):
     exe_path = Path(sys.executable).resolve()
     remove_old_versions(exe_path)
 check_for_update()
+freeze_month_if_needed()  # <--- DODAJ TUTAJ!
 root = tb.Window(themename="superhero")
 root.title("Kontrola czasu pracy")
 root.geometry("600x400")
